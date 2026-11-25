@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>CoffeeShot Booth</title>
+<style>
+  :root {
+    --bg: #faf7de;
+    --card: #fffdf2;
+    --ink: #3b2a1e;
+    --muted: #7a6650;
+    --accent: #8a5a2b;
+    --accent-ink: #fffdf2;
+    --line: #e6dcb8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1f1812;
+      --card: #2a2119;
+      --ink: #f3ead6;
+      --muted: #bba98f;
+      --accent: #d9a35f;
+      --accent-ink: #1f1812;
+      --line: #3d3125;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 120px; }
+  h1 { font-size: 22px; margin: 4px 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+  .photo {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px;
+    margin-bottom: 14px;
+  }
+  .photo img { width: 100%; display: block; border-radius: 8px; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 18px;
+    cursor: pointer;
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .photo button { width: 100%; margin-top: 10px; }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
+  .bar button { display: block; width: 100%; max-width: 528px; margin: 0 auto; font-size: 17px; }
+  .msg { text-align: center; margin-top: 30vh; color: var(--muted); }
+  .msg strong { display: block; color: var(--ink); font-size: 20px; margin-bottom: 6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Your CoffeeShot photos</h1>
+  <p class="sub" id="timer">Loading…</p>
+  <div id="photos"></div>
+  <div class="msg" id="msg" hidden></div>
+</main>
+<div class="bar" id="bar" hidden><button id="saveAll">Save all</button></div>
+
+<script>
+  // Edge Function booth-upload di Supabase; tidak butuh key karena Verify JWT dimatikan
+  const API = "https://hhkmnnjolwgsdpxberae.supabase.co/functions/v1/booth-upload";
+  const session = new URLSearchParams(location.search).get("s");
+  const $ = (id) => document.getElementById(id);
+  let files = [];   // File per foto, diunduh di awal supaya tombol Save langsung jalan (iOS butuh klik langsung)
+
+  function showMessage(title, text) {
+    $("photos").hidden = true;
+    $("bar").hidden = true;
+    $("timer").hidden = true;
+    $("msg").hidden = false;
+    $("msg").innerHTML = "";
+    const t = document.createElement("strong");
+    t.textContent = title;
+    $("msg").append(t, text);
+  }
+
+  async function save(list) {
+    // iPhone/Android: share sheet → "Save Image" masuk ke Photos. Selain itu: unduh biasa.
+    if (navigator.canShare && navigator.canShare({ files: list })) {
+      try { await navigator.share({ files: list }); return; }
+      catch (e) { if (e.name === "AbortError") return; }
+    }
+    for (const f of list) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(f);
+      a.download = f.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  function startTimer(seconds) {
+    const end = Date.now() + seconds * 1000;
+    const tick = () => {
+      const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+      if (left === 0) {
+        showMessage("This link has expired", "Photos you already saved are still on your phone.");
+        return;
+      }
+      $("timer").textContent = `Save them before the link expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+      setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
+  async function load() {
+    if (!session) return showMessage("No photos here", "Scan the QR code at the booth to get your photos.");
+    let res;
+    try { res = await fetch(`${API}?s=${encodeURIComponent(session)}`); }
+    catch { return showMessage("Couldn't load your photos", "Check your connection and reload the page."); }
+    if (res.status === 410) return showMessage("This link has expired", "Booth links only last 5 minutes.");
+    if (!res.ok) return showMessage("Couldn't load your photos", "Try scanning the QR code again.");
+
+    const { photos, expiresIn } = await res.json();
+    startTimer(expiresIn);
+    photos.forEach((url, i) => {
+      const box = document.createElement("div");
+      box.className = "photo";
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = `Photo ${i + 1}`;
+      const btn = document.createElement("button");
+      btn.textContent = "Save photo";
+      btn.disabled = true;
+      btn.onclick = () => save([files[i]]);
+      box.append(img, btn);
+      $("photos").append(box);
+    });
+    $("saveAll").textContent = photos.length > 1 ? `Save all ${photos.length} photos` : "Save photo";
+    $("saveAll").disabled = true;
+    $("saveAll").onclick = () => save(files);
+    $("bar").hidden = photos.length < 2;
+
+    files = await Promise.all(photos.map(async (url, i) => {
+      const blob = await (await fetch(url)).blob();
+      return new File([blob], `CoffeeShot-${i + 1}.jpg`, { type: "image/jpeg" });
+    }));
+    document.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+
+  load();
+</script>
+</body>
+</html>
